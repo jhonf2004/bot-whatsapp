@@ -1,107 +1,187 @@
-
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
-const fetch = require('node-fetch'); // Para descargar imágenes
-const fs = require('fs'); // Para manejar archivos locales
-const path = require('path'); // Para manejar rutas de archivos
+const fs = require('fs');
+const path = require('path');
+const { OpenAI } = require("openai");
 
-// Lista de palabras similares para "adiós"
-const adiosWords = ['adios', 'bye', 'chau', 'hasta luego', 'hasta la vista', 'nos vemos', 'see you'];
+const adiosWords = ['adios', 'bye', 'chau', 'hasta luego', 'hasta la vista', 'nos vemos', 'see you', 'Adiós'];
+const holaWords = ['hola', 'oli', 'ola', 'buenas', 'buenos días', 'qué tal', 'hey', 'holis', 'Jhon', 'JHONNN', 'JHON'];
 
-// Lista de palabras similares para "hola"
-const holaWords = ['hola', 'oli', 'ola', 'buenas', 'buenos días', 'qué tal', 'hey'];
-
-// Crear expresiones regulares combinadas para las palabras de "adiós" y "hola"
 const adiosRegex = new RegExp(`\\b(${adiosWords.join('|')})\\b`, 'i');
 const holaRegex = new RegExp(`\\b(${holaWords.join('|')})\\b`, 'i');
 
-// Inicializar el cliente de WhatsApp Web
 const client = new Client({
-    authStrategy: new LocalAuth() // Utilizamos LocalAuth para guardar la sesión
+    authStrategy: new LocalAuth()
 });
 
-// Función para verificar si el mensaje contiene alguna palabra de adiós
+// Configuración de la API de AIML
+const AIML_API_KEY = 'bb0553a31a3840069b3efdd8e7554dfd'; 
+const baseURL = "https://api.aimlapi.com/v1";
+
+
+const aimlClient = new OpenAI({
+    apiKey: AIML_API_KEY,
+    baseURL: baseURL,
+});
+
+// Función con AIML API
+async function processWithAI(messageText) {
+    try {
+        const completion = await aimlClient.chat.completions.create({
+            model: "mistralai/Mistral-7B-Instruct-v0.2",
+            messages: [
+                {
+                    role: "system",
+                    content: "Eres un asistente programado por JF (Jhon) y respondes sus chats que le escriben en español."
+                },
+                {
+                    role: "user",
+                    content: messageText
+                }
+            ],
+            temperature: 0.7,
+            max_tokens: 256
+        });
+
+        return completion.choices[0].message.content;
+    } catch (error) {
+        console.error('Error con la API de AIML:', error.response || error);
+        return "Lo siento, tuve un problema procesando tu solicitud.";
+    }
+}
+
+const comandos = {
+    "/sticker": "Convierte una imagen en sticker.",
+    "/cmds": "Muestra la lista de comandos disponibles.",
+    "/ai": "Activa el modo IA. Pregúntame lo que quieras."
+};
+
 const containsGoodbye = (message) => {
     return adiosRegex.test(message);
 };
 
-// Función para verificar si el mensaje contiene alguna palabra de saludo
 const containsHello = (message) => {
     return holaRegex.test(message);
 };
 
-// Función para enviar un mensaje de bienvenida si es un chat nuevo
 const sendWelcomeMessage = async (message) => {
     const currentDate = new Date();
     const lastInteractionDate = new Date(message.timestamp * 1000);
     
-    // Si la interacción fue en un día diferente, enviar mensaje de bienvenida
     if (currentDate.toDateString() !== lastInteractionDate.toDateString()) {
         await message.reply('¡Hola! Bienvenido nuevamente. ¿En qué puedo ayudarte hoy?');
     }
 };
 
-// Comando para convertir imágenes en stickers
 const createSticker = async (message) => {
     if (message.hasMedia) {
         const media = await message.downloadMedia();
-        const image = media.data; // Aquí tenemos la imagen en base64
+        const image = media.data;
         
-        const imagePath = path.join(__dirname, 'temp_image.jpg'); // Ruta temporal para guardar la imagen
-
-        // Guardar la imagen
+        const imagePath = path.join(__dirname, 'temp_image.jpg');
         fs.writeFileSync(imagePath, Buffer.from(image, 'base64'));
 
-        // Convertir la imagen a sticker usando WhatsApp Web JS
         const sticker = await client.sendMessage(message.from, fs.readFileSync(imagePath), {
             sendMediaAsSticker: true,
             stickerMetadata: { alt: 'Sticker' }
         });
 
-        // Eliminar la imagen temporal
         fs.unlinkSync(imagePath);
     } else {
         message.reply('Por favor, envíame una imagen junto con el comando "/sticker".');
     }
 };
 
-// Generar el código QR cuando se inicie el bot
+const showCommands = async (message) => {
+        let commandList = "📋 *Lista de Comandos Disponibles*:\n/stickers ";
+    
+    for (const [cmd, desc] of Object.entries(comandos)) {
+        commandList += `*${cmd}*: ${desc}\n`;
+    }
+    
+    await message.reply(commandList);
+};
+
+// Para manejar el modo AI
+let aiModeUsers = {};
+
 client.on('qr', qr => {
     qrcode.generate(qr, { small: true });
     console.log('Escanea este código QR en tu WhatsApp para autenticarte');
 });
 
-// Evento cuando el cliente está listo (conectado)
 client.on('ready', () => {
     console.log('¡Bot está listo y conectado!');
+    // Guardar el ID del bot para futuras referencias
+    global.botId = client.info.wid._serialized;
+    console.log(`ID del bot: ${global.botId}`);
 });
 
-// Responder a los mensajes entrantes
 client.on('message', async (message) => {
-    // Asegurarse de que solo responde en chats personales
-    if (message.isGroupMsg) {
-        console.log('El mensaje es de un grupo, no responderé.');
-        return; // No responder en grupos
+    console.log('Mensaje recibido:', {
+        from: message.from,
+        author: message.author || 'N/A',
+        body: message.body,
+        type: message.type,
+        isGroup: message.from.includes('@g.us')
+    });
+    
+    const isGroup = message.from.includes('@g.us');
+    
+    if (isGroup) {
+
+        const botMentioned = message.mentionedIds && message.mentionedIds.includes(global.botId);
+        
+        if (!botMentioned) {
+            console.log('Mensaje de grupo sin mención al bot');
+            return;
+        }
+        
+        console.log('Bot mencionado en grupo, procesando mensaje');
+    }
+    
+    const chat = await message.getChat();
+    if (chat.archived || chat.isMuted) {
+        console.log('Chat archivado o silenciado, omitido');
+        return;
     }
 
-    // Verificar si el mensaje es de despedida (adiós, bye, chau, etc.)
-    if (containsGoodbye(message.body)) {
-        message.reply('¡Adiós! ¡Hasta la próxima!');  // Responder de la misma forma
+    const senderId = message.from;
+    
+    if (message.body === '/cmds') {
+        await showCommands(message);
     }
-    // Verificar si el mensaje es de saludo (hola, oli, ola, etc.)
+    else if (message.body === '/ai') {
+        
+        aiModeUsers[senderId] = true;
+        await message.reply('Modo IA activado. Ahora puedes preguntarme lo que quieras. Para salir del modo IA, escribe "/exit".');
+    }
+    else if (message.body === '/exit' && aiModeUsers[senderId]) {
+        
+        aiModeUsers[senderId] = false;
+        await message.reply('Has salido del modo IA. Para volver a activarlo, escribe "/ai".');
+    }
+    else if (aiModeUsers[senderId]) {
+        
+        // await message.reply('Procesando tu consulta...');
+        const aiResponse = await processWithAI(message.body);
+        await message.reply(aiResponse);
+    }
+    else if (containsGoodbye(message.body)) {
+        await message.reply('¡Adiós! ¡Hasta la próxima!'); 
+    }
     else if (containsHello(message.body)) {
-        message.reply('¡Hola! Soy un bot de WhatsApp. ¿En qué puedo ayudarte?');
+        await message.reply('¡Hola! Soy un bot en desarrollo por JF. ¿En qué puedo ayudarte?' +
+                'Puedes escribir "/cmds" para ver la lista de comandos disponibles.'
+        );
     }
-    // Comando /sticker para crear stickers
     else if (message.body.startsWith('/sticker')) {
         await createSticker(message);
     } else {
-        message.reply('Lo siento, no entiendo ese mensaje.');
+        await message.reply('Lo siento, no entiendo ese mensaje.\n Escribe "/cmds" para ver los comandos disponibles \nactiva el modo IA con "/ai".');
     }
 
-    // Enviar mensaje de bienvenida si es un chat nuevo
     await sendWelcomeMessage(message);
 });
 
-// Iniciar el cliente
 client.initialize();
