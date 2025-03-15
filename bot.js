@@ -15,7 +15,7 @@ const client = new Client({
 });
 
 // Configuración de la API de AIML
-const AIML_API_KEY = 'bb0553a31a3840069b3efdd8e7554dfd'; 
+const AIML_API_KEY = 'TU KEY API AQUI'; 
 const baseURL = "https://api.aimlapi.com/v1";
 
 
